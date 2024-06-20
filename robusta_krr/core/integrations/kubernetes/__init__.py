@@ -26,6 +26,8 @@ from . import config_patch as _
 
 logger = logging.getLogger("krr")
 
+COREKINDS = ["Deployment", "DaemonSet", "StatefulSet", "Job", "CronJob", "ReplicaSet"]
+
 AnyKubernetesAPIObject = Union[V1Deployment, V1DaemonSet, V1StatefulSet, V1Pod, V1Job]
 HPAKey = tuple[str, str, str]
 
@@ -68,6 +70,7 @@ class ClusterLoader:
             self._list_all_daemon_set(),
             self._list_all_jobs(),
             self._list_all_cronjobs(),
+            self._list_standalone_pods(),
         )
 
         return [
@@ -239,7 +242,9 @@ class ClusterLoader:
         result = []
         try:
             for item in await self._list_namespaced_or_global_objects(kind, all_namespaces_request, namespaced_request):
+                logger.debug(f"Processing {kind} {item.metadata.name}")
                 if filter_workflows is not None and not filter_workflows(item):
+                    logger.debug(f"filter_workflows {filter_workflows(item)} for {kind} {item.metadata.name}") 
                     continue
 
                 containers = extract_containers(item)
@@ -364,7 +369,22 @@ class ClusterLoader:
                 owner.kind == "CronJob" for owner in item.metadata.owner_references or []
             ),
         )
+    
+    def _list_standalone_pods(self) -> list[K8sObjectData]:
+        logger.debug("Listing standalone pods")
 
+        return self._list_scannable_objects(
+            kind="Pod",
+            all_namespaces_request=self.core.list_pod_for_all_namespaces,
+            namespaced_request=self.core.list_namespaced_pod,
+            extract_containers=lambda item: item.spec.containers,
+            filter_workflows=lambda item: any(
+                owner.kind == "Pod"
+                or owner.kind not in COREKINDS
+                for owner in item.metadata.owner_references or []
+            )
+        )
+    
     def _list_all_cronjobs(self) -> list[K8sObjectData]:
         return self._list_scannable_objects(
             kind="CronJob",
